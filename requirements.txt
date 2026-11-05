@@ -1,3 +1,5 @@
 garminconnect
 python-dotenv
 supabase
+requests
+anthropic
