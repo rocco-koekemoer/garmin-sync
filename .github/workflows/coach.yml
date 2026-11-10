@@ -1,0 +1,32 @@
+name: Weekly coach review
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'   # Mondays 12:00 UTC, after the daily health sync
+  workflow_dispatch:
+
+concurrency:
+  group: garmin-coach
+  cancel-in-progress: false
+
+jobs:
+  coach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Weekly review
+        run: python coach.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
