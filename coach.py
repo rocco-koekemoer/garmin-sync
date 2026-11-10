@@ -8,16 +8,20 @@ Ask a question:  python3 coach.py "Am I ready to race a 10K?"   -> printed here
 The weekly review is saved to Supabase, NOT printed, because logs on a public
 GitHub repo are public. Questions are printed, so only ask them on your own computer.
 
-Needs ANTHROPIC_API_KEY in .env (local) or as a GitHub secret.
+Runs on your Claude subscription through Claude Code - no API key needed.
+Locally it uses your Claude Code login. On GitHub it uses the
+CLAUDE_CODE_OAUTH_TOKEN secret (create it with: claude setup-token).
 Create the coach_reports table once with sql/coach_reports.sql.
 """
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
 
 from sync_garmin import BASE_DIR, get_supabase, log
@@ -183,39 +187,36 @@ def load_training_data(sb):
 
 # ---------- Claude ----------
 
-def ask_claude(data, request):
-    client = anthropic.Anthropic()
-    with client.beta.messages.stream(
-        model=MODEL,
-        max_tokens=32000,
-        output_config={"effort": "high"},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "<training_data>\n"
-                 + json.dumps(data, indent=1) + "\n</training_data>"},
-                {"type": "text", "text": request},
-            ],
-        }],
-    ) as stream:
-        message = stream.get_final_message()
+def find_claude():
+    """The Claude Code command: CLAUDE_BIN, then PATH, then the VS Code extension's copy."""
+    if os.getenv("CLAUDE_BIN"):
+        return os.getenv("CLAUDE_BIN")
+    if shutil.which("claude"):
+        return shutil.which("claude")
+    bundled = sorted(Path.home().glob(
+        ".vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude"))
+    if bundled:
+        return str(bundled[-1])
+    raise SystemExit("Claude Code not found. Install it or set CLAUDE_BIN.")
 
-    if message.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to answer this request.")
-    text = "".join(b.text for b in message.content if b.type == "text").strip()
-    if message.stop_reason == "max_tokens":
-        text += "\n\n_(Report was cut off - it hit the length limit.)_"
-    return text, message.model
+
+def ask_claude(data, request):
+    prompt = ("<training_data>\n" + json.dumps(data, indent=1)
+              + "\n</training_data>\n\n" + request
+              + "\n\nReply with the answer only, in Markdown.")
+    result = subprocess.run(
+        [find_claude(), "-p", "--model", MODEL, "--system-prompt", SYSTEM_PROMPT,
+         "--tools", "", "--output-format", "text"],
+        input=prompt, capture_output=True, text=True, timeout=900,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(f"Claude Code failed (exit {result.returncode}): "
+                           f"{result.stderr.strip()[:300]}")
+    return result.stdout.strip(), MODEL
 
 
 def main():
     load_dotenv(BASE_DIR / ".env")
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise SystemExit("Missing ANTHROPIC_API_KEY.")
-
     question = " ".join(sys.argv[1:]).strip()
     sb = get_supabase()
     data = load_training_data(sb)
